@@ -1,5 +1,5 @@
 # Resource Monitor for NvDA
-# Presents basic info on CPU load, memory and disk usage, as well as battery information.
+# Presents basic system info: CPU info, ram and disk usage, up time, Windows version, etc
 # Authors: Alex Hall, Joseph Lee, Beqa Gozalishvili, Tuukka Ojala
 # Copyright 2013-2020, released under GPL.
 
@@ -11,12 +11,15 @@ import globalPluginHandler
 import ui
 import api
 import scriptHandler
+import config
+import gui
+import wx
 from . import psutil
 import addonHandler
 addonHandler.initTranslation()
 
 # Styles of size calculation/string composition, do not change!
-# Treditional style, Y, K, M, G, B, ...
+# Traditional style, Y, K, M, G, B, ...
 traditional = [
 	(1024.0**8.0, 'Y'),
 	(1024.0**7.0, 'Z'),
@@ -94,7 +97,6 @@ def size(bytes, system=traditional):
 		else:
 			suffix = multiple
 	return "{:.2F}{}".format(float(amount), suffix)
-
 
 def tryTrunk(n):
 	# This method basically removes decimal zeros, so 5.0 will just be 5.
@@ -214,6 +216,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# Translators: Presented when a resource summary is copied to clipboard.
 	RMCopyMessage = _("Resource summary copied to clipboard")
 
+	# translators: the full name of this addon, used in dialogs and other places
+	friendlyName = _("Resource Monitor")
+	shortName = "resourceMonitor"
+	configTag = "addons.resourceMonitor" #used as the key for all this addon's settings in the config
+
+	def __init__(self, *args, **kwargs):
+		super(GlobalPlugin, self).__init__(*args, **kwargs)
+		gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(ResourceMonitorSettings)
+	
+	def onConfigDialog(self, evt):
+		gui.mainFrame._popupSettingsDialog(ResourceMonitorSettings)
+	
+	def terminate(self):
+		gui.settingsDialogs.NVDASettingsDialog.categoryClasses.remove(ResourceMonitorSettings)
+
 	@scriptHandler.script(
 		# Translators: Input help message about battery info command in Resource Monitor.
 		description=_("Presents battery percentage, charging status, remaining time (if not charging), and a warning if the battery is low or critical."),
@@ -258,6 +275,16 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		averageLoad = psutil.cpu_percent()
 		# Lists load for each core
 		perCpuLoad = psutil.cpu_percent(percpu=True)
+		coreLoad = []
+		minCoreLoad = config.conf[self.configTag]["minCoreLoad"]
+		try:
+			minCoreLoad = float(minCoreLoad)
+		except ValueError:
+			minCoreLoad = 1.0
+		for i in range(len(perCpuLoad)):
+			#skip a core if its load is below our minimum
+			if perCpuLoad[i] <= minCoreLoad:
+				continue
 		coreLoad = [
 			# Translators: Shows average load of CPU cores (example: core 1, 50%).
 			_("Core {coreNumber}: {corePercent}%").format(coreNumber=core, corePercent=tryTrunk(cpuLoad))
@@ -403,3 +430,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if batteryInfo is not None:
 			info.append(batteryInfo)
 		ui.message(" ".join(info))
+
+class ResourceMonitorSettings(gui.settingsDialogs.SettingsPanel):
+	title = GlobalPlugin.friendlyName
+
+	def makeSettings(self, settingsSizer):
+		# translators: label for the control below whose value a CPU core's load is not output
+		minCoreLoadLabel = _("Skip speaking CPU cores at or below this load (in GhZ):")
+		settingsDialog = gui.guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
+		currentMinCoreLoadValue = config.conf[GlobalPlugin.configTag]["minCoreLoad"]
+		self.minCoreLoadTextField = settingsDialog.addItem(wx.TextCtrl(self, name=minCoreLoadLabel, value=currentMinCoreLoadValue.__str__()))
+	
+	def onSave(self):
+		config.conf[GlobalPlugin.configTag]["minCoreLoad"] = self.minCoreLoadTextField.GetValue()
+
+
+#spec for use with the configuration system
+configSpec = {
+	"minCoreLoad": "float(min=0.0, max=100.0, default=1.0)"
+}
+config.conf.spec[GlobalPlugin.configTag] = configSpec
+
